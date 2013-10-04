@@ -10,7 +10,6 @@ createrailspgdb() {
 
 newrails() {
   gem install rails
-  rbenv rehash
   rails new $1 -T -d postgresql
   createrailspgdb $1
   cd $1
