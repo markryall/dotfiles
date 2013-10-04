@@ -1,6 +1,6 @@
 alias serve_this="open http://localhost:8000 && python -m SimpleHTTPServer"
 
-alias rl=". ~/.zshrc"
+alias rl="fresh && . ~/.zshrc"
 
 alias vim="mvim -v"
 alias vi="mvim -v"
