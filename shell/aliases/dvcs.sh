@@ -30,19 +30,31 @@ _dvcscd() {
 }
 
 _ghcd() {
+  if [ -z $GH_BASE ]; then
+    echo please set GH_BASE to specify where you want github repositories checked out
+    return
+  fi
+  if [ -z $GH_USER ]; then
+    echo please set GH_USER to specify your github username
+    return
+  fi
   _dvcscd git $GH_BASE $GH_USER $1 $2 $3
 }
 
 _bbcd() {
+  if [ -z $BB_BASE ]; then
+    echo please set GH_BASE to specify where you want bitbucket repositories checked out
+    return
+  fi
+  if [ -z $BB_USER ]; then
+    echo please set BB_USER to specify your bitbucket username
+    return
+  fi
   _dvcscd $1 $BB_BASE $BB_USER $2 $3 $4
 }
 
 gh() {
   _ghcd git@github.com: $1 $2
-}
-
-ghp() {
-  _ghcd git://github.com/ $1 $2
 }
 
 bb() {
