@@ -1,9 +1,8 @@
 alias g="git status"
-alias ga="git add ."
-alias gaa="git add -A ."
+alias ga="git add -A ."
 alias gl="git log"
 alias gd="git diff"
-alias gsl="git stash list"
+alias gds="git diff --staged"
 alias gsl="git stash list"
 alias gsc="git stash clear"
 
