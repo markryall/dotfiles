@@ -41,6 +41,18 @@ _ghcd() {
   _dvcscd git $GH $GH_USER $1 $2 $3
 }
 
+_glcd() {
+  if [ -z $GL ]; then
+    echo please set GL to specify where you want gitlab repositories checked out
+    return
+  fi
+  if [ -z $GL_USER ]; then
+    echo please set GL_USER to specify your gitlab username
+    return
+  fi
+  _dvcscd git $GL $GL_USER $1 $2 $3
+}
+
 _bbcd() {
   if [ -z $BB ]; then
     echo please set BB to specify where you want bitbucket repositories checked out
@@ -55,6 +67,10 @@ _bbcd() {
 
 gh() {
   _ghcd git@github.com: $1 $2
+}
+
+gl() {
+  _glcd git@gitlab.com: $1 $2
 }
 
 bb() {
