@@ -65,14 +65,14 @@ _bbcd() {
   _dvcscd $1 $BB $BB_USER $2 $3 $4
 }
 
-gh() {
+github() {
   _ghcd git@github.com: $1 $2
 }
 
-gl() {
+gitlab() {
   _glcd git@gitlab.com: $1 $2
 }
 
-bb() {
+bitbucket() {
   _bbcd git git@bitbucket.org: $1 $2
 }
