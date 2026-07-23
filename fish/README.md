@@ -28,3 +28,23 @@ cp fish/scripts/fish-usage-report.py ~/.config/fish/scripts/
 ```sh
 fish-usage-report
 ```
+
+## github
+
+Clones a GitHub repo into `$CODE/github/<user>/<project>` (creating the
+folders if needed) and `cd`s into it, or just `cd`s there if it's already
+cloned. Takes `user/project`, `project` alone (falls back to `$GH_USER`), or
+a full `.git` URL/path — trailing `.git` is stripped either way.
+
+**Install:**
+
+```sh
+cp fish/functions/github.fish ~/.config/fish/functions/
+```
+
+**Use:**
+
+```sh
+github markryall/dotfiles
+github dotfiles   # uses $GH_USER
+```
