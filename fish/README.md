@@ -7,17 +7,20 @@ own fish config.
 ## fish-usage-report
 
 Generates an HTML report comparing how often you actually type each of your
-fish functions (from `fish_history`) against how long their names are, so you
-can spot high-frequency functions worth giving a short alias. Opens the
-report in your browser.
+fish functions against how long their names are, so you can spot
+high-frequency functions worth giving a short alias. Opens the report in
+your browser.
 
 **Requires:** `python3` on `PATH`.
 
-**Known limitation:** fish's history file collapses an exact repeat down to
-one entry (it bumps the timestamp instead of appending), so commands you
-always run identically — especially no-argument aliases — are undercounted.
-Treat the numbers as a floor, not an exact tally; the report notes this
-inline.
+**Data source:** prefers [atuin](https://atuin.sh)'s history database
+(`~/.local/share/atuin/history.db`) when present, since it logs every
+invocation as its own row. Falls back to fish's own `fish_history` otherwise
+— which collapses an exact repeat down to one entry (it bumps the timestamp
+instead of appending), so commands you always run identically, especially
+no-argument aliases, come out undercounted there. Treat fish_history-sourced
+numbers as a floor, not an exact tally; the report notes which source it
+used and adjusts its wording accordingly.
 
 **Install:**
 

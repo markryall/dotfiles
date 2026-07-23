@@ -1,24 +1,65 @@
 #!/usr/bin/env python3
 """Generate an HTML usage report for fish functions vs. how often they're
 actually typed, so high-frequency functions with long names surface as
-candidates for a short alias. Reads ~/.local/share/fish/fish_history and
-~/.config/fish/functions, writes the report to the path given as argv[1].
+candidates for a short alias. Prefers atuin's history.db (every invocation is
+its own row) when present, falling back to fish's own fish_history (which
+collapses exact repeats to one entry, undercounting no-arg commands). Reads
+~/.config/fish/functions for the function list; writes the report to the path
+given as argv[1].
 """
-import html
 import json
 import os
 import re
+import sqlite3
 import sys
 from datetime import datetime, timezone
 
 HISTORY_FILE = os.path.expanduser("~/.local/share/fish/fish_history")
+ATUIN_DB = os.path.expanduser("~/.local/share/atuin/history.db")
 FUNCTIONS_DIR = os.path.expanduser("~/.config/fish/functions")
 CANDIDATE_MIN_LEN = 3
 CANDIDATE_MIN_COUNT = 10
 CHART_ROWS = 20
 
 
-def load_counts():
+def load_counts_atuin():
+    """Per-invocation counts from atuin's history.db, which (unlike fish's own
+    history) logs every execution as its own row instead of collapsing exact
+    repeats. Returns None if atuin has no usable data, so callers can fall
+    back to fish_history.
+    """
+    if not os.path.isfile(ATUIN_DB):
+        return None
+    try:
+        uri = f"file:{ATUIN_DB}?mode=ro"
+        con = sqlite3.connect(uri, uri=True)
+        try:
+            cur = con.execute(
+                "select command, timestamp from history where deleted_at is null"
+            )
+            rows = cur.fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+
+    if not rows:
+        return None
+
+    counts = {}
+    when_values = []
+    for command, timestamp_ns in rows:
+        command = (command or "").strip()
+        if not command:
+            continue
+        first = command.split()[0] if command.split() else ""
+        if first:
+            counts[first] = counts.get(first, 0) + 1
+        when_values.append(timestamp_ns / 1_000_000_000)
+    return counts, when_values
+
+
+def load_counts_fish_history():
     counts = {}
     when_values = []
     if not os.path.isfile(HISTORY_FILE):
@@ -42,6 +83,15 @@ def load_counts():
     return counts, when_values
 
 
+def load_counts():
+    atuin = load_counts_atuin()
+    if atuin is not None:
+        counts, when_values = atuin
+        return counts, when_values, "atuin"
+    counts, when_values = load_counts_fish_history()
+    return counts, when_values, "fish_history"
+
+
 def load_function_names():
     names = []
     if not os.path.isdir(FUNCTIONS_DIR):
@@ -54,7 +104,7 @@ def load_function_names():
 
 def main():
     out_path = sys.argv[1]
-    counts, when_values = load_counts()
+    counts, when_values, source = load_counts()
     names = load_function_names()
 
     rows = []
@@ -82,6 +132,7 @@ def main():
         "chart": chart_rows,
         "tail": tail_rows,
         "span": span,
+        "source": source,
         "totalInvocations": total_invocations,
         "candidateMinLen": CANDIDATE_MIN_LEN,
         "candidateMinCount": CANDIDATE_MIN_COUNT,
@@ -369,21 +420,16 @@ TEMPLATE = """<!doctype html>
     <p id="subtitle"></p>
   </header>
 
-  <div class="note">
+  <div class="note" id="note">
     <span class="icon">&#9432;</span>
-    <span>fish's history file collapses an exact repeat down to one entry (it just
-    bumps the timestamp), so anything you run identically every time — like
-    <code>a</code> or <code>e</code> with no arguments — is undercounted here.
-    Commands typically run with varying arguments (<code>s &lt;file&gt;</code>) come
-    much closer to a true count. Treat these numbers as a floor, not an exact
-    tally.</span>
+    <span id="note-text"></span>
   </div>
 
   <div class="stats" id="stats"></div>
 
   <div class="card">
     <h2>Most-used functions</h2>
-    <p class="sub">Top 20 by invocation count, from fish_history. Blue badge = long name (≥ 3 chars) called ≥ 10 times — a shortening candidate.</p>
+    <p class="sub" id="chart-sub"></p>
     <div class="chart" id="chart"></div>
   </div>
 
@@ -396,16 +442,37 @@ TEMPLATE = """<!doctype html>
     </table>
   </div>
 
-  <footer>Generated from fish_history — counts reflect distinct command lines typed, not raw invocation count (see note above).</footer>
+  <footer id="footer"></footer>
 </div>
 
 <div class="tooltip" id="tooltip" role="tooltip"></div>
 
 <script>
 const data = __DATA__;
+const usingAtuin = data.source === "atuin";
 
 document.getElementById("subtitle").textContent =
-  "History window " + data.span + " • " + data.totalInvocations.toLocaleString() + " tracked invocations";
+  "History window " + data.span + " • " + data.totalInvocations.toLocaleString() +
+  " tracked invocations (via " + (usingAtuin ? "atuin" : "fish_history") + ")";
+
+document.getElementById("note-text").textContent = usingAtuin
+  ? "Counts come from atuin's history database, which logs every invocation " +
+    "as its own row — including exact repeats — so these are true call counts, " +
+    "not just distinct command variants."
+  : "fish's history file collapses an exact repeat down to one entry (it just " +
+    "bumps the timestamp), so anything you run identically every time — like a " +
+    "no-argument alias — is undercounted here. Commands typically run with " +
+    "varying arguments come much closer to a true count. Treat these numbers " +
+    "as a floor, not an exact tally. Install atuin for exact counts.";
+
+document.getElementById("chart-sub").textContent =
+  "Top 20 by invocation count, from " + (usingAtuin ? "atuin" : "fish_history") +
+  ". Blue badge = long name (≥ " + data.candidateMinLen + " chars) called ≥ " +
+  data.candidateMinCount + " times — a shortening candidate.";
+
+document.getElementById("footer").textContent = usingAtuin
+  ? "Generated from atuin's history database — counts reflect every invocation."
+  : "Generated from fish_history — counts reflect distinct command lines typed, not raw invocation count (see note above).";
 
 const stats = document.getElementById("stats");
 function statTile(label, value) {
