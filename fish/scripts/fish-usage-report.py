@@ -202,6 +202,31 @@ TEMPLATE = """<!doctype html>
     color: var(--text-secondary);
     margin: 0 0 20px;
   }
+  .note {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 24px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .note .icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .note code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--series-1-wash);
+    color: var(--text-primary);
+    padding: 1px 4px;
+    border-radius: 4px;
+    font-size: 11px;
+  }
   .chart {
     position: relative;
     min-width: 560px;
@@ -344,6 +369,16 @@ TEMPLATE = """<!doctype html>
     <p id="subtitle"></p>
   </header>
 
+  <div class="note">
+    <span class="icon">&#9432;</span>
+    <span>fish's history file collapses an exact repeat down to one entry (it just
+    bumps the timestamp), so anything you run identically every time — like
+    <code>a</code> or <code>e</code> with no arguments — is undercounted here.
+    Commands typically run with varying arguments (<code>s &lt;file&gt;</code>) come
+    much closer to a true count. Treat these numbers as a floor, not an exact
+    tally.</span>
+  </div>
+
   <div class="stats" id="stats"></div>
 
   <div class="card">
@@ -361,7 +396,7 @@ TEMPLATE = """<!doctype html>
     </table>
   </div>
 
-  <footer>Generated from fish_history — counts only reflect commands typed as the first word on a line.</footer>
+  <footer>Generated from fish_history — counts reflect distinct command lines typed, not raw invocation count (see note above).</footer>
 </div>
 
 <div class="tooltip" id="tooltip" role="tooltip"></div>

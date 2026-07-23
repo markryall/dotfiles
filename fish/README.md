@@ -13,6 +13,12 @@ report in your browser.
 
 **Requires:** `python3` on `PATH`.
 
+**Known limitation:** fish's history file collapses an exact repeat down to
+one entry (it bumps the timestamp instead of appending), so commands you
+always run identically — especially no-argument aliases — are undercounted.
+Treat the numbers as a floor, not an exact tally; the report notes this
+inline.
+
 **Install:**
 
 ```sh
