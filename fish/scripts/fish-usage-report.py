@@ -7,11 +7,32 @@ collapses exact repeats to one entry, undercounting no-arg commands). Reads
 ~/.config/fish/functions for the function list; writes the report to the path
 given as argv[1].
 
-Abbreviations are expanded on the command line before the command runs, so
-history records the full name either way and counts stay attributed to it.
-That keeps the numbers comparable across the change, but means history alone
-can't tell an already-shortened function from one still crying out for it —
-so we also read `abbr --show` and use it to suppress the "shorten?" badge.
+Abbreviations are expanded on the command line before the command runs, so the
+shorthand never reaches history — only the expansion does. Counting the first
+word alone would therefore lose an abbreviated command entirely (`bundle exec
+rspec` isn't a function) or dump unrelated ones into a shared bucket (every
+`jj` subcommand). So commands are matched against the *longest* token prefix
+of a known target, where a target is either a function name (one token) or an
+abbreviation's expansion (several) — function counting is just the one-token
+case of the same rule.
+
+Since the trigger is unrecoverable from history, every occurrence of an
+expansion is assumed to have been typed via its abbreviation, which is what
+lets the report total up the keystrokes they've saved.
+
+Optional settings live in ~/.config/fish/fish-usage-report.json (override with
+FISH_USAGE_REPORT_CONFIG); every key is optional and the report runs fine
+without the file at all:
+
+    {
+      "candidateMinLen": 3,       // a name this long...
+      "candidateMinCount": 10,    // ...called this often is worth shortening
+      "chartRows": 20,
+      "assumedTriggerLen": 2,     // length to cost an unwritten abbreviation at
+      "replaced": {               // abbreviations that replaced a function
+        "d": ["desc"]             // whose name they don't share
+      }
+    }
 """
 import json
 import os
@@ -25,16 +46,30 @@ from datetime import datetime, timezone
 HISTORY_FILE = os.path.expanduser("~/.local/share/fish/fish_history")
 ATUIN_DB = os.path.expanduser("~/.local/share/atuin/history.db")
 FUNCTIONS_DIR = os.path.expanduser("~/.config/fish/functions")
-CANDIDATE_MIN_LEN = 3
-CANDIDATE_MIN_COUNT = 10
-CHART_ROWS = 20
+CONFIG_FILE = os.environ.get(
+    "FISH_USAGE_REPORT_CONFIG",
+    os.path.expanduser("~/.config/fish/fish-usage-report.json"),
+)
+
+DEFAULTS = {
+    # A name this long, called this often, is worth shortening.
+    "candidateMinLen": 3,
+    "candidateMinCount": 10,
+    "chartRows": 20,
+    # What an as-yet-unwritten abbreviation would plausibly be, for costing out
+    # the keystrokes a candidate is still leaving on the table.
+    "assumedTriggerLen": 2,
+    # trigger -> names it used to be called, for abbreviations that replaced a
+    # function of a different name. Purely personal history, hence config.
+    "replaced": {},
+}
 
 
-def load_counts_atuin():
-    """Per-invocation counts from atuin's history.db, which (unlike fish's own
-    history) logs every execution as its own row instead of collapsing exact
-    repeats. Returns None if atuin has no usable data, so callers can fall
-    back to fish_history.
+def load_commands_atuin():
+    """Every command run, tokenised, from atuin's history.db, which (unlike
+    fish's own history) logs every execution as its own row instead of
+    collapsing exact repeats. Returns None if atuin has no usable data, so
+    callers can fall back to fish_history.
     """
     if not os.path.isfile(ATUIN_DB):
         return None
@@ -54,59 +89,58 @@ def load_counts_atuin():
     if not rows:
         return None
 
-    counts = {}
+    commands = []
     when_values = []
     for command, timestamp_ns in rows:
-        command = (command or "").strip()
-        if not command:
-            continue
-        first = command.split()[0] if command.split() else ""
-        if first:
-            counts[first] = counts.get(first, 0) + 1
+        tokens = (command or "").split()
+        if tokens:
+            commands.append(tokens)
         when_values.append(timestamp_ns / 1_000_000_000)
-    return counts, when_values
+    return commands, when_values
 
 
-def load_counts_fish_history():
-    counts = {}
+def load_commands_fish_history():
+    commands = []
     when_values = []
     if not os.path.isfile(HISTORY_FILE):
-        return counts, when_values
+        return commands, when_values
     cmd_re = re.compile(r"^- cmd:\s?(.*)$")
     when_re = re.compile(r"^\s+when:\s?(\d+)$")
     with open(HISTORY_FILE, encoding="utf-8", errors="replace") as f:
         for line in f:
             m = cmd_re.match(line)
             if m:
-                cmd = m.group(1).strip()
-                if not cmd:
-                    continue
-                first = cmd.split()[0] if cmd.split() else ""
-                if first:
-                    counts[first] = counts.get(first, 0) + 1
+                tokens = m.group(1).split()
+                if tokens:
+                    commands.append(tokens)
                 continue
             m = when_re.match(line)
             if m:
                 when_values.append(int(m.group(1)))
-    return counts, when_values
+    return commands, when_values
 
 
-def load_counts():
-    atuin = load_counts_atuin()
+def load_commands():
+    atuin = load_commands_atuin()
     if atuin is not None:
-        counts, when_values = atuin
-        return counts, when_values, "atuin"
-    counts, when_values = load_counts_fish_history()
-    return counts, when_values, "fish_history"
+        commands, when_values = atuin
+        return commands, when_values, "atuin"
+    commands, when_values = load_commands_fish_history()
+    return commands, when_values, "fish_history"
 
 
 def load_abbrs():
-    """Map command name -> sorted list of the abbreviations that expand to it.
+    """Map expansion -> {"triggers": [...], "prefix": (tokens,)}.
 
     `abbr --show` emits re-runnable fish, one definition per line, as
-    `abbr -a [flags] -- NAME [EXPANSION]`. We key on the first word of the
-    expansion, matching how history commands are normalised above, so
-    `abbr -a -- ba build-all` registers against `build-all`.
+    `abbr -a [flags] -- NAME [EXPANSION]`. Keyed on the whole expansion, since
+    that is what history records; callers that only care which function is
+    fronted use abbrs_by_first_token below.
+
+    `prefix` is the leading tokens that will actually appear in history. For a
+    --set-cursor abbreviation these stop short of the placeholder, and drop the
+    token containing it: `make pair names=%` can only be relied on to produce
+    `make pair`, since `names=` is completed with text we never see.
     """
     try:
         proc = subprocess.run(
@@ -137,15 +171,56 @@ def load_abbrs():
         # --function abbrs compute their expansion at runtime; nothing to key on.
         if len(rest) < 2:
             continue
-        name, expansion = rest[0], rest[1]
-        target = expansion.split()[0] if expansion.split() else ""
-        if not target:
+        name, raw = rest[0], rest[1]
+        marker = cursor_marker(flags)
+        prefix = tuple(raw.split(marker)[0].split()) if marker else tuple(raw.split())
+        if marker and not raw.split(marker)[0].endswith((" ", "\t")):
+            prefix = prefix[:-1]
+        expansion = " ".join(raw.replace(marker, "").split()) if marker else " ".join(raw.split())
+        if not expansion or not prefix:
             continue
         # With --regex the trigger is the pattern, not the name, so show that.
         if "--regex" in flags and flags.index("--regex") + 1 < len(flags):
             name = flags[flags.index("--regex") + 1]
-        abbrs.setdefault(target, set()).add(name)
-    return {target: sorted(names) for target, names in abbrs.items()}
+        entry = abbrs.setdefault(expansion, {"triggers": set(), "prefix": prefix})
+        entry["triggers"].add(name)
+    return {
+        expansion: {"triggers": sorted(e["triggers"]), "prefix": e["prefix"]}
+        for expansion, e in abbrs.items()
+    }
+
+
+def cursor_marker(flags):
+    """The --set-cursor placeholder, which defaults to % when given bare.
+    Empty when the abbreviation doesn't use one.
+    """
+    for flag in flags:
+        if flag.startswith("--set-cursor="):
+            return flag.split("=", 1)[1]
+    return "%" if "--set-cursor" in flags else ""
+
+
+def abbrs_by_first_token(abbrs):
+    """Expansions regrouped by the command they start with, so a function row
+    can show the abbreviations that front it.
+    """
+    by_token = {}
+    for entry in abbrs.values():
+        by_token.setdefault(entry["prefix"][0], set()).update(entry["triggers"])
+    return {token: sorted(names) for token, names in by_token.items()}
+
+
+def load_config():
+    """Optional JSON settings, so the script itself stays free of any one
+    person's shell history. Absent or unreadable config just means defaults.
+    """
+    config = dict(DEFAULTS)
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            config.update(json.load(f))
+    except (OSError, ValueError):
+        return config
+    return config
 
 
 def load_function_names():
@@ -158,32 +233,103 @@ def load_function_names():
     return sorted(names)
 
 
+def build_rows(function_names, abbrs, expansions, replaced):
+    """One row per thing worth counting, plus the token prefixes that credit it.
+
+    A function is a one-token target. An abbreviation whose expansion doesn't
+    start with a function name has no row to attach to, so it gets its own —
+    otherwise `bundle exec rspec` would vanish and every `jj` subcommand would
+    pile into one bucket. Such a row also claims its bare trigger, which only
+    appears in history from the shorthand's previous life as a function, so the
+    count survives the conversion instead of resetting to zero — along with any
+    differently-named predecessors declared in the `replaced` config, which the
+    history has no way of connecting on its own.
+    """
+    rows = []
+    lookup = {}
+
+    for name in function_names:
+        row = {
+            "name": name,
+            "count": 0,
+            "len": len(name),
+            "abbrs": abbrs.get(name, []),
+            "kind": "function",
+        }
+        rows.append(row)
+        lookup[(name,)] = row
+
+    for expansion, entry in sorted(expansions.items()):
+        prefix = entry["prefix"]
+        if prefix in lookup:
+            continue
+        row = {
+            "name": expansion,
+            "count": 0,
+            "len": len(expansion),
+            "abbrs": entry["triggers"],
+            "kind": "abbr",
+        }
+        rows.append(row)
+        lookup[prefix] = row
+        for trigger in entry["triggers"]:
+            lookup.setdefault((trigger,), row)
+            for old in replaced.get(trigger, []):
+                lookup.setdefault((old,), row)
+
+    return rows, lookup
+
+
+def tally(commands, lookup):
+    """Credit each command to the longest target that prefixes it, so `jj log
+    -r x` counts toward `jj log` rather than a bare `jj`, and every command
+    lands on at most one row.
+    """
+    longest = max((len(k) for k in lookup), default=0)
+    for tokens in commands:
+        for size in range(min(longest, len(tokens)), 0, -1):
+            row = lookup.get(tuple(tokens[:size]))
+            if row is not None:
+                row["count"] += 1
+                break
+
+
 def main():
     out_path = sys.argv[1]
-    counts, when_values, source = load_counts()
+    config = load_config()
+    commands, when_values, source = load_commands()
     names = load_function_names()
     abbrs = load_abbrs()
 
-    rows = []
-    for name in names:
-        c = counts.get(name, 0)
-        name_abbrs = abbrs.get(name, [])
-        candidate = (
-            len(name) >= CANDIDATE_MIN_LEN
-            and c >= CANDIDATE_MIN_COUNT
-            and not name_abbrs
+    rows, lookup = build_rows(
+        names,
+        abbrs_by_first_token(abbrs),
+        abbrs,
+        config["replaced"],
+    )
+    tally(commands, lookup)
+
+    for row in rows:
+        row["candidate"] = (
+            row["kind"] == "function"
+            and row["len"] >= config["candidateMinLen"]
+            and row["count"] >= config["candidateMinCount"]
+            and not row["abbrs"]
         )
-        rows.append({
-            "name": name,
-            "count": c,
-            "len": len(name),
-            "candidate": candidate,
-            "abbrs": name_abbrs,
-        })
+        # Every occurrence is assumed to have been typed via the shortest
+        # trigger — the abbreviation is unrecoverable from history, and the
+        # point is to celebrate the saving, not to audit it.
+        trigger = min(row["abbrs"], key=len) if row["abbrs"] else None
+        row["saved"] = row["count"] * max(0, row["len"] - len(trigger)) if trigger else 0
+        row["potential"] = (
+            row["count"] * max(0, row["len"] - config["assumedTriggerLen"])
+            if row["candidate"]
+            else 0
+        )
 
     rows.sort(key=lambda r: (-r["count"], r["name"]))
 
-    chart_rows = [r for r in rows if r["count"] > 0][:CHART_ROWS]
+    chart_rows = [r for r in rows if r["count"] > 0][:config["chartRows"]]
     tail_rows = [r for r in rows if r not in chart_rows]
 
     if when_values:
@@ -203,10 +349,13 @@ def main():
         "span": span,
         "source": source,
         "totalInvocations": total_invocations,
-        "candidateMinLen": CANDIDATE_MIN_LEN,
-        "candidateMinCount": CANDIDATE_MIN_COUNT,
+        "candidateMinLen": config["candidateMinLen"],
+        "candidateMinCount": config["candidateMinCount"],
         "candidateCount": len(candidates),
         "abbreviatedCount": len(abbreviated),
+        "keystrokesSaved": sum(r["saved"] for r in rows),
+        "keystrokesOnTable": sum(r["potential"] for r in rows),
+        "assumedTriggerLen": config["assumedTriggerLen"],
     }
 
     html_out = TEMPLATE.replace("__DATA__", json.dumps(data))
@@ -305,6 +454,11 @@ TEMPLATE = """<!doctype html>
   .stat-tile .value {
     font-size: 24px;
     font-weight: 600;
+  }
+  .stat-tile .sub-value {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
   }
   .card {
     background: var(--surface-1);
@@ -440,6 +594,13 @@ TEMPLATE = """<!doctype html>
     color: var(--text-primary);
     white-space: nowrap;
   }
+  /* A near-full bar leaves no room to the right, so the label sits inside it. */
+  .row .value.inside {
+    transform: translateX(-100%);
+    padding-left: 0;
+    padding-right: 8px;
+    color: #fff;
+  }
   .baseline {
     position: absolute;
     left: 0;
@@ -510,7 +671,7 @@ TEMPLATE = """<!doctype html>
   <div class="stats" id="stats"></div>
 
   <div class="card">
-    <h2>Most-used functions</h2>
+    <h2>Most-used commands</h2>
     <p class="sub" id="chart-sub"></p>
     <div class="chart" id="chart"></div>
   </div>
@@ -558,15 +719,16 @@ document.getElementById("note-text").textContent =
 document.getElementById("chart-sub").textContent =
   "Top 20 by invocation count, from " + (usingAtuin ? "atuin" : "fish_history") +
   ". Blue badge = long name (≥ " + data.candidateMinLen + " chars) called ≥ " +
-  data.candidateMinCount + " times — a shortening candidate. A ↔ chip means an " +
-  "abbreviation already expands to it, so it's excluded from the badge.";
+  data.candidateMinCount + " times — a shortening candidate, costed against a " +
+  data.assumedTriggerLen + "-character trigger. A ↔ chip means an abbreviation " +
+  "already expands to it, so it's excluded from the badge.";
 
 document.getElementById("footer").textContent = usingAtuin
   ? "Generated from atuin's history database — counts reflect every invocation."
   : "Generated from fish_history — counts reflect distinct command lines typed, not raw invocation count (see note above).";
 
 const stats = document.getElementById("stats");
-function statTile(label, value) {
+function statTile(label, value, sub) {
   const tile = document.createElement("div");
   tile.className = "stat-tile";
   const l = document.createElement("div");
@@ -577,12 +739,26 @@ function statTile(label, value) {
   v.textContent = value;
   tile.appendChild(l);
   tile.appendChild(v);
+  if (sub) {
+    const s = document.createElement("div");
+    s.className = "sub-value";
+    s.textContent = sub;
+    tile.appendChild(s);
+  }
   return tile;
 }
-stats.appendChild(statTile("Functions tracked", data.chart.length + data.tail.length));
+stats.appendChild(statTile("Commands tracked", data.chart.length + data.tail.length));
 stats.appendChild(statTile("Total invocations", data.totalInvocations.toLocaleString()));
-stats.appendChild(statTile("Shortening candidates", data.candidateCount));
-stats.appendChild(statTile("Already abbreviated", data.abbreviatedCount));
+stats.appendChild(statTile(
+  "Keystrokes saved",
+  data.keystrokesSaved.toLocaleString(),
+  "🦭 " + data.keystrokesSaved.toLocaleString() + " seals spared"
+));
+stats.appendChild(statTile(
+  "Still on the table",
+  data.keystrokesOnTable.toLocaleString(),
+  data.candidateCount + " candidates unshortened"
+));
 
 function abbrChip(row) {
   if (!row.abbrs || !row.abbrs.length) return null;
@@ -643,7 +819,7 @@ data.chart.forEach(r => {
   bar.className = "bar";
   bar.style.width = "max(2px, " + pct + "%)";
   const value = document.createElement("div");
-  value.className = "value";
+  value.className = pct > 82 ? "value inside" : "value";
   value.style.left = "max(2px, " + pct + "%)";
   value.textContent = r.count.toLocaleString();
   barWrap.appendChild(bar);
@@ -660,8 +836,10 @@ data.chart.forEach(r => {
     const strong = document.createElement("strong");
     strong.textContent = r.count.toLocaleString();
     tooltip.appendChild(strong);
-    const suffix = r.abbrs && r.abbrs.length ? " (↔ " + r.abbrs.join(", ") + ")" : "";
-    tooltip.appendChild(document.createTextNode(" uses — " + r.name + suffix));
+    let suffix = " uses — " + r.name;
+    if (r.saved) suffix += " · saved " + r.saved.toLocaleString() + " keystrokes 🦭";
+    else if (r.potential) suffix += " · " + r.potential.toLocaleString() + " keystrokes on the table";
+    tooltip.appendChild(document.createTextNode(suffix));
   });
   row.addEventListener("pointerleave", () => {
     tooltip.style.opacity = "0";

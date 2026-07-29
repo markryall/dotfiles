@@ -11,6 +11,20 @@ fish functions against how long their names are, so you can spot
 high-frequency functions worth giving a short alias. Opens the report in
 your browser.
 
+**Abbreviations** are counted too. Because `abbr` expands on the command line
+before the command runs, history only ever records the expansion — so the
+report matches each command against the longest known token prefix, where a
+prefix is either a function name or an abbreviation's expansion. That keeps
+`bundle exec rspec` visible as one row instead of vanishing, stops every `jj`
+subcommand piling into a single bucket, and lets it total up the keystrokes
+your abbreviations have saved. Functions already fronted by an abbreviation
+show a `↔` chip and stop being flagged as candidates.
+
+Define your abbreviations somewhere a non-interactive shell will see them —
+`conf.d/` or an unguarded part of `config.fish` — since the report reads them
+via `fish -c 'abbr --show'`. Wrapped in `if status is-interactive`, they're
+invisible to it.
+
 **Requires:** `python3` on `PATH`.
 
 **Data source:** prefers [atuin](https://atuin.sh)'s history database
@@ -37,6 +51,32 @@ cp fish/scripts/fish-usage-report.py ~/.config/fish/scripts/
 ```sh
 fish-usage-report
 ```
+
+**Configuration** is optional — the report runs with sensible defaults and no
+config file. To tune it, create `~/.config/fish/fish-usage-report.json` (or
+point `FISH_USAGE_REPORT_CONFIG` elsewhere). Every key is optional:
+
+```json
+{
+  "candidateMinLen": 3,
+  "candidateMinCount": 10,
+  "chartRows": 20,
+  "assumedTriggerLen": 2,
+  "replaced": { "d": ["desc"] }
+}
+```
+
+A name at least `candidateMinLen` characters long, called at least
+`candidateMinCount` times, gets flagged as worth shortening, and the
+keystrokes it would save are costed against an abbreviation of
+`assumedTriggerLen` characters.
+
+`replaced` exists because converting a function to an abbreviation splits its
+history in two. An abbreviation automatically claims history entries matching
+its own name, so `s` replacing a function called `s` needs no configuration.
+But `d` expanding to `jj describe` where the old function was called `desc`
+leaves those entries stranded, and nothing in the history connects the two —
+listing `"d": ["desc"]` reunites them.
 
 ## github
 
