@@ -6,11 +6,19 @@ its own row) when present, falling back to fish's own fish_history (which
 collapses exact repeats to one entry, undercounting no-arg commands). Reads
 ~/.config/fish/functions for the function list; writes the report to the path
 given as argv[1].
+
+Abbreviations are expanded on the command line before the command runs, so
+history records the full name either way and counts stay attributed to it.
+That keeps the numbers comparable across the change, but means history alone
+can't tell an already-shortened function from one still crying out for it —
+so we also read `abbr --show` and use it to suppress the "shorten?" badge.
 """
 import json
 import os
 import re
+import shlex
 import sqlite3
+import subprocess
 import sys
 from datetime import datetime, timezone
 
@@ -92,6 +100,54 @@ def load_counts():
     return counts, when_values, "fish_history"
 
 
+def load_abbrs():
+    """Map command name -> sorted list of the abbreviations that expand to it.
+
+    `abbr --show` emits re-runnable fish, one definition per line, as
+    `abbr -a [flags] -- NAME [EXPANSION]`. We key on the first word of the
+    expansion, matching how history commands are normalised above, so
+    `abbr -a -- ba build-all` registers against `build-all`.
+    """
+    try:
+        proc = subprocess.run(
+            ["fish", "-c", "abbr --show"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if proc.returncode != 0:
+        return {}
+
+    abbrs = {}
+    for line in proc.stdout.splitlines():
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+        if not tokens or tokens[0] != "abbr" or "--" not in tokens:
+            continue
+        sep = tokens.index("--")
+        flags, rest = tokens[:sep], tokens[sep + 1:]
+        # --command abbrs expand a subcommand (git ci), not a top-level
+        # command, so they never shorten one of our functions.
+        if "--command" in flags:
+            continue
+        # --function abbrs compute their expansion at runtime; nothing to key on.
+        if len(rest) < 2:
+            continue
+        name, expansion = rest[0], rest[1]
+        target = expansion.split()[0] if expansion.split() else ""
+        if not target:
+            continue
+        # With --regex the trigger is the pattern, not the name, so show that.
+        if "--regex" in flags and flags.index("--regex") + 1 < len(flags):
+            name = flags[flags.index("--regex") + 1]
+        abbrs.setdefault(target, set()).add(name)
+    return {target: sorted(names) for target, names in abbrs.items()}
+
+
 def load_function_names():
     names = []
     if not os.path.isdir(FUNCTIONS_DIR):
@@ -106,12 +162,24 @@ def main():
     out_path = sys.argv[1]
     counts, when_values, source = load_counts()
     names = load_function_names()
+    abbrs = load_abbrs()
 
     rows = []
     for name in names:
         c = counts.get(name, 0)
-        candidate = len(name) >= CANDIDATE_MIN_LEN and c >= CANDIDATE_MIN_COUNT
-        rows.append({"name": name, "count": c, "len": len(name), "candidate": candidate})
+        name_abbrs = abbrs.get(name, [])
+        candidate = (
+            len(name) >= CANDIDATE_MIN_LEN
+            and c >= CANDIDATE_MIN_COUNT
+            and not name_abbrs
+        )
+        rows.append({
+            "name": name,
+            "count": c,
+            "len": len(name),
+            "candidate": candidate,
+            "abbrs": name_abbrs,
+        })
 
     rows.sort(key=lambda r: (-r["count"], r["name"]))
 
@@ -127,6 +195,7 @@ def main():
 
     total_invocations = sum(r["count"] for r in rows)
     candidates = [r for r in rows if r["candidate"]]
+    abbreviated = [r for r in rows if r["abbrs"]]
 
     data = {
         "chart": chart_rows,
@@ -136,10 +205,11 @@ def main():
         "totalInvocations": total_invocations,
         "candidateMinLen": CANDIDATE_MIN_LEN,
         "candidateMinCount": CANDIDATE_MIN_COUNT,
+        "candidateCount": len(candidates),
+        "abbreviatedCount": len(abbreviated),
     }
 
     html_out = TEMPLATE.replace("__DATA__", json.dumps(data))
-    html_out = html_out.replace("__CANDIDATE_COUNT__", str(len(candidates)))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_out)
 
@@ -304,7 +374,7 @@ TEMPLATE = """<!doctype html>
   }
   .row {
     display: grid;
-    grid-template-columns: 140px 1fr;
+    grid-template-columns: 190px 1fr;
     align-items: center;
     gap: 12px;
     padding: 5px 0;
@@ -331,6 +401,18 @@ TEMPLATE = """<!doctype html>
     font-size: 10px;
     font-weight: 600;
     vertical-align: middle;
+  }
+  .chip {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--gridline);
+    color: var(--text-muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10px;
+    vertical-align: middle;
+    white-space: nowrap;
   }
   .row .bar-wrap {
     position: relative;
@@ -455,7 +537,7 @@ document.getElementById("subtitle").textContent =
   "History window " + data.span + " • " + data.totalInvocations.toLocaleString() +
   " tracked invocations (via " + (usingAtuin ? "atuin" : "fish_history") + ")";
 
-document.getElementById("note-text").textContent = usingAtuin
+const sourceNote = usingAtuin
   ? "Counts come from atuin's history database, which logs every invocation " +
     "as its own row — including exact repeats — so these are true call counts, " +
     "not just distinct command variants."
@@ -465,10 +547,19 @@ document.getElementById("note-text").textContent = usingAtuin
     "varying arguments come much closer to a true count. Treat these numbers " +
     "as a floor, not an exact tally. Install atuin for exact counts.";
 
+const abbrNote =
+  " Abbreviations expand before the command runs, so history records the full " +
+  "name and these counts stay attributed to it either way — no split totals, " +
+  "no one-letter entries in your history.";
+
+document.getElementById("note-text").textContent =
+  sourceNote + (data.abbreviatedCount ? abbrNote : "");
+
 document.getElementById("chart-sub").textContent =
   "Top 20 by invocation count, from " + (usingAtuin ? "atuin" : "fish_history") +
   ". Blue badge = long name (≥ " + data.candidateMinLen + " chars) called ≥ " +
-  data.candidateMinCount + " times — a shortening candidate.";
+  data.candidateMinCount + " times — a shortening candidate. A ↔ chip means an " +
+  "abbreviation already expands to it, so it's excluded from the badge.";
 
 document.getElementById("footer").textContent = usingAtuin
   ? "Generated from atuin's history database — counts reflect every invocation."
@@ -488,10 +579,20 @@ function statTile(label, value) {
   tile.appendChild(v);
   return tile;
 }
-const candidateCount = __CANDIDATE_COUNT__;
 stats.appendChild(statTile("Functions tracked", data.chart.length + data.tail.length));
 stats.appendChild(statTile("Total invocations", data.totalInvocations.toLocaleString()));
-stats.appendChild(statTile("Shortening candidates", candidateCount));
+stats.appendChild(statTile("Shortening candidates", data.candidateCount));
+stats.appendChild(statTile("Already abbreviated", data.abbreviatedCount));
+
+function abbrChip(row) {
+  if (!row.abbrs || !row.abbrs.length) return null;
+  const chip = document.createElement("span");
+  chip.className = "chip";
+  chip.textContent = "↔ " + row.abbrs.join(", ");
+  chip.title = "Abbreviation" + (row.abbrs.length > 1 ? "s" : "") +
+    " expanding to " + row.name;
+  return chip;
+}
 
 const chartEl = document.getElementById("chart");
 const tooltip = document.getElementById("tooltip");
@@ -532,6 +633,8 @@ data.chart.forEach(r => {
     badge.textContent = "shorten?";
     nameEl.appendChild(badge);
   }
+  const chip = abbrChip(r);
+  if (chip) nameEl.appendChild(chip);
 
   const barWrap = document.createElement("div");
   barWrap.className = "bar-wrap";
@@ -557,7 +660,8 @@ data.chart.forEach(r => {
     const strong = document.createElement("strong");
     strong.textContent = r.count.toLocaleString();
     tooltip.appendChild(strong);
-    tooltip.appendChild(document.createTextNode(" uses — " + r.name));
+    const suffix = r.abbrs && r.abbrs.length ? " (↔ " + r.abbrs.join(", ") + ")" : "";
+    tooltip.appendChild(document.createTextNode(" uses — " + r.name + suffix));
   });
   row.addEventListener("pointerleave", () => {
     tooltip.style.opacity = "0";
@@ -577,6 +681,8 @@ data.tail.forEach(r => {
   const nameTd = document.createElement("td");
   nameTd.className = "name-cell";
   nameTd.textContent = r.name;
+  const tailChip = abbrChip(r);
+  if (tailChip) nameTd.appendChild(tailChip);
   const countTd = document.createElement("td");
   countTd.className = "num";
   countTd.textContent = r.count.toLocaleString();
