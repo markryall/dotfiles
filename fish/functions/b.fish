@@ -18,8 +18,8 @@ function b --description "Open bookmarks or URLs in a specific Crest space"
             echo ""
             echo "  b add <name> <space> <url>.. [+tag..]   save a bookmark"
             echo "  b add standup Work https://meet.google.com/abc-defg-hij +workday"
-            echo "  b add order Work https://shop.example.com/orders/{1}"
-            echo "  b add search Personal https://www.google.com/search?q={*}"
+            echo "  b add order Work 'https://shop.example.com/orders/{1}'"
+            echo "  b add search Personal 'https://www.google.com/search?q={*}'"
             echo "  b edit                           open the bookmarks file"
         case tags
             if test (count $argv) -ge 2

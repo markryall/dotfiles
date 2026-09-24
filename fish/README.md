@@ -138,8 +138,10 @@ b <name>                       # open a bookmark in its space
 b @<tag>                       # open every bookmark carrying a tag
 b go                           # fuzzy-pick a bookmark (fzf) and open it
 b add <name> <space> <url>     # save a bookmark
-b add order Work https://shop.example.com/orders/{1}
+b add order Work 'https://shop.example.com/orders/{1}'
+b add search Personal 'https://www.google.com/search?q={*}'
 b order 42                     # fills {1} -> 42
+b search fish abbr             # fills {*} -> fish%20abbr
 b in <space> <url>...          # open url(s) in a space
 b edit                         # open the bookmarks file in $EDITOR (vim if unset)
 b spaces                       # list Crest spaces
