@@ -43,7 +43,10 @@ function b --description "Open bookmarks or URLs in a specific Crest space"
         case spaces
             __b_spaces
         case edit
-            emacsclient -n (__b_bookmarks file)
+            # $EDITOR may carry its own flags, like "emacsclient -n" or "code --wait"
+            set -l editor vim
+            set -q EDITOR; and test -n "$EDITOR"; and set editor (string split -n ' ' -- $EDITOR)
+            $editor (__b_bookmarks file)
         case add
             __b_bookmarks add $argv[2..]
         case in

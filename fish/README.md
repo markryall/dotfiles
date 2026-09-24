@@ -141,6 +141,6 @@ b add <name> <space> <url>     # save a bookmark
 b add order Work https://shop.example.com/orders/{1}
 b order 42                     # fills {1} -> 42
 b in <space> <url>...          # open url(s) in a space
-b edit                         # open the bookmarks file
+b edit                         # open the bookmarks file in $EDITOR (vim if unset)
 b spaces                       # list Crest spaces
 ```
