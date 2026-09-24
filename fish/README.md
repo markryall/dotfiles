@@ -118,14 +118,14 @@ A bookmark's URL can use `{1}`, `{2}`, … or `{*}` as placeholders that get
 filled from extra args at open time.
 
 **Requires:** Crest on macOS, with the spaces you want allowed in Settings ›
-Agents; `b.py` (the bookmark and Crest helper) in `$__fish_config_dir/bin`;
-`fzf` for `b go`.
+Agents; Python 3.11+ (for `tomllib`); `fzf` for `b go`.
 
 **Install:**
 
 ```sh
 cp fish/functions/b.fish ~/.config/fish/functions/
 cp fish/completions/b.fish ~/.config/fish/completions/
+mkdir -p ~/.config/fish/bin && cp fish/bin/b.py ~/.config/fish/bin/   # bookmark and Crest helper
 touch ~/.browser-bookmarks.toml   # or symlink to wherever you keep your own bookmarks file
 ```
 
@@ -139,7 +139,7 @@ b @<tag>                       # open every bookmark carrying a tag
 b go                           # fuzzy-pick a bookmark (fzf) and open it
 b add <name> <space> <url>     # save a bookmark
 b add order Work https://shop.example.com/orders/{1}
-b order 42           # fills {1} -> 42
+b order 42                     # fills {1} -> 42
 b in <space> <url>...          # open url(s) in a space
 b edit                         # open the bookmarks file
 b spaces                       # list Crest spaces
