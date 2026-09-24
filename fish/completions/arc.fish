@@ -7,7 +7,7 @@ function __arc_complete_tags
 end
 
 function __arc_complete_spaces
-    osascript -l JavaScript -e 'const w = Application("Arc").windows; w.length ? w[0].spaces.title().join("\n") : ""' 2>/dev/null
+    string replace -rf '^Name=' '' <"$HOME/Library/Application Support/zen/profiles.ini" 2>/dev/null
 end
 
 complete -c arc -f
@@ -19,7 +19,7 @@ complete -c arc -n __fish_use_subcommand -a go -d 'Fuzzy-pick a bookmark (fzf)'
 complete -c arc -n __fish_use_subcommand -a in -d 'Open url(s) in a space'
 complete -c arc -n __fish_use_subcommand -a add -d 'Save a bookmark: arc add <name> <space> <url>.. [+tag..]'
 complete -c arc -n __fish_use_subcommand -a edit -d 'Edit the bookmarks file'
-complete -c arc -n __fish_use_subcommand -a spaces -d 'List Arc spaces'
+complete -c arc -n __fish_use_subcommand -a spaces -d 'List Zen profiles'
 complete -c arc -n __fish_use_subcommand -a help -d 'Show usage'
 complete -c arc -n '__fish_seen_subcommand_from tags; and test (count (commandline -opc)) -eq 2' -a "(__arc_complete_tags)"
 complete -c arc -n '__fish_seen_subcommand_from in; and test (count (commandline -opc)) -eq 2' -a "(__arc_complete_spaces)"

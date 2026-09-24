@@ -1,4 +1,4 @@
-function arc --description "Open bookmarks or URLs in a specific Arc space"
+function arc --description "Open bookmarks or URLs in a specific Zen profile"
     switch "$argv[1]"
         case "" list
             __arc_bookmarks list | sort | __arc_table
@@ -14,7 +14,7 @@ function arc --description "Open bookmarks or URLs in a specific Arc space"
             echo "  arc in <space> <url>..  open url(s) in a space (name matched loosely)"
             echo "  arc add <name> <space> <url>.. [+tag..]  save a bookmark"
             echo "  arc edit                open the bookmarks file"
-            echo "  arc spaces              list Arc spaces"
+            echo "  arc spaces              list Zen profiles"
             echo ""
             echo "templated bookmarks: use {1} {2} .. for positional args, {*} for all remaining args joined"
             echo "  arc add order Work https://shop.example.com/orders/{1}"
@@ -43,7 +43,7 @@ function arc --description "Open bookmarks or URLs in a specific Arc space"
             test -n "$sel"; or return 1
             arc (string match -r '^\S+' -- $sel)
         case spaces
-            osascript -l JavaScript -e 'const w = Application("Arc").windows; w.length ? w[0].spaces.title().join("\n") : "no Arc windows open"'
+            __arc_spaces
         case edit
             emacsclient -n (__arc_bookmarks file)
         case add
@@ -86,7 +86,7 @@ function __arc_open_tag
         return 1
     end
 
-    # One Arc call per space, so a tag spanning spaces opens each space's tabs together.
+    # One Zen call per profile, so a tag spanning profiles opens each one's tabs together.
     set -l spaces
     for line in $lines
         set -l parts (string split \t $line)
@@ -140,27 +140,35 @@ function __arc_open_template
     __arc_open $space $template
 end
 
+function __arc_spaces --description "List Zen profile names"
+    string replace -rf '^Name=' '' <"$HOME/Library/Application Support/zen/profiles.ini"
+end
+
 function __arc_open
-    osascript -l JavaScript -e '
-function run(argv) {
-  const arc = Application("Arc");
-  const q = argv[0].toLowerCase();
-  if (!arc.windows.length) {
-    arc.activate();
-    for (let n = 0; n < 20 && !arc.windows.length; n++) delay(0.25);
-    if (!arc.windows.length) throw "Arc has no windows";
-  }
-  const win = arc.windows[0];
-  const titles = win.spaces.title();
-  let i = titles.findIndex((t) => t.toLowerCase() === q);
-  if (i < 0) i = titles.findIndex((t) => t.toLowerCase().includes(q));
-  if (i < 0) throw "no space matches: " + argv[0] + "\nspaces: " + titles.join(", ");
-  const space = win.spaces[i];
-  space.focus();
-  const urls = argv.slice(1).map((u) => (u.match(/^[a-z]+:\/\//) ? u : "https://" + u));
-  for (const u of urls) space.tabs.push(arc.Tab({ url: u }));
-  arc.activate();
-  return "opened in " + titles[i] + ": " + urls.join(" ");
-}
-' -- $argv
+    set -l q (string lower -- $argv[1])
+    set -l names (__arc_spaces)
+    set -l name
+    for n in $names
+        test (string lower -- $n) = $q; and set name $n; and break
+    end
+    if test -z "$name"
+        for n in $names
+            string match -q -- "*$q*" (string lower -- $n); and set name $n; and break
+        end
+    end
+    if test -z "$name"
+        echo "no profile matches: $argv[1]" >&2
+        echo "profiles: "(string join ", " $names) >&2
+        return 1
+    end
+
+    set -l args -P $name
+    for u in $argv[2..]
+        string match -qr '^[a-z]+://' -- $u; or set u https://$u
+        set -a args --new-tab $u
+    end
+    # -n starts a fresh process each time; Zen hands the urls to the profile's
+    # instance when it is already running, or becomes that instance when not.
+    open -na /Applications/Zen.app --args $args
+    echo "opened in $name: "(string join " " $argv[2..])
 end
