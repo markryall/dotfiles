@@ -98,35 +98,49 @@ github markryall/dotfiles
 github dotfiles   # uses $GH_USER
 ```
 
-## arc
+## b
 
-Open bookmarked URLs in a specific [Arc](https://arc.net) browser space by
-name, with tab completion and a fuzzy picker. Bookmarks are read from a
-pipe-delimited file at `~/.arc-bookmarks` — `name | space | url`, one per
-line — which is **not** part of this repo (it's personal data; create your
-own). A bookmark's URL can use `{1}`, `{2}`, … or `{*}` as placeholders that
-get filled from extra args at open time.
+Open bookmarked URLs in a specific [Crest](https://github.com/pauljoda/Crest)
+browser space by name, with tab completion, tags and a fuzzy picker. `b` talks
+to Crest through its own MCP server (`crest-browser mcp`), so tabs open straight
+into the named space. Bookmarks live in a TOML file at
+`~/.browser-bookmarks.toml`, one table per bookmark, which is **not** part of
+this repo (it's personal data; create your own):
 
-**Requires:** [Arc](https://arc.net) on macOS; `fzf` for `arc go`.
+```toml
+[chat-work]
+space = "Work"
+url = "https://chat.example.com"
+tags = ["workday"]
+```
+
+A bookmark's URL can use `{1}`, `{2}`, … or `{*}` as placeholders that get
+filled from extra args at open time.
+
+**Requires:** Crest on macOS, with the spaces you want allowed in Settings ›
+Agents; `b.py` (the bookmark and Crest helper) in `$__fish_config_dir/bin`;
+`fzf` for `b go`.
 
 **Install:**
 
 ```sh
-cp fish/functions/arc.fish ~/.config/fish/functions/
-cp fish/completions/arc.fish ~/.config/fish/completions/
-touch ~/.arc-bookmarks   # or symlink to wherever you keep your own bookmarks file
+cp fish/functions/b.fish ~/.config/fish/functions/
+cp fish/completions/b.fish ~/.config/fish/completions/
+touch ~/.browser-bookmarks.toml   # or symlink to wherever you keep your own bookmarks file
 ```
 
 **Use:**
 
 ```sh
-arc                              # list bookmarks
-arc <name>                       # open a bookmark in its space
-arc go                           # fuzzy-pick a bookmark (fzf) and open it
-arc add <name> <space> <url>     # save a bookmark
-arc add order Work https://shop.example.com/orders/{1}
-arc order 42           # fills {1} -> 42
-arc in <space> <url>...          # open url(s) in a space
-arc edit                         # open the bookmarks file
-arc spaces                       # list Arc spaces
+b                              # usage with examples
+b list                         # list bookmarks
+b <name>                       # open a bookmark in its space
+b @<tag>                       # open every bookmark carrying a tag
+b go                           # fuzzy-pick a bookmark (fzf) and open it
+b add <name> <space> <url>     # save a bookmark
+b add order Work https://shop.example.com/orders/{1}
+b order 42           # fills {1} -> 42
+b in <space> <url>...          # open url(s) in a space
+b edit                         # open the bookmarks file
+b spaces                       # list Crest spaces
 ```
