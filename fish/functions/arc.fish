@@ -1,71 +1,111 @@
 function arc --description "Open bookmarks or URLs in a specific Arc space"
-    set -l file ~/.arc-bookmarks
-
     switch "$argv[1]"
         case "" list
-            __arc_bookmark_lines $file | sort | awk -F'\t' '{printf "%-18s %-16s %s\n", $1, $2, $3}'
+            __arc_bookmarks list | sort | __arc_table
         case help -h --help
             echo "usage:"
             echo "  arc                     list bookmarks"
             echo "  arc <name>              open bookmark in its space"
             echo "  arc <name> <arg>..      fill a templated bookmark's {1} {2}.. or {*} placeholders"
+            echo "  arc @<tag>              open every bookmark carrying that tag"
+            echo "  arc tags                list tags and how many bookmarks carry each"
+            echo "  arc tags <tag>          list the bookmarks carrying a tag"
             echo "  arc go                  fuzzy-pick a bookmark (fzf) and open it"
             echo "  arc in <space> <url>..  open url(s) in a space (name matched loosely)"
-            echo "  arc add <name> <space> <url>..  save a bookmark"
+            echo "  arc add <name> <space> <url>.. [+tag..]  save a bookmark"
             echo "  arc edit                open the bookmarks file"
             echo "  arc spaces              list Arc spaces"
             echo ""
             echo "templated bookmarks: use {1} {2} .. for positional args, {*} for all remaining args joined"
             echo "  arc add order Work https://shop.example.com/orders/{1}"
             echo "  arc add search Personal https://www.google.com/search?q={*}"
+            echo ""
+            echo "tags: a bookmark can carry any number, and a tag can span spaces"
+            echo "  arc add standup-ops Work https://meet.google.com/abc-defg-hij +workday +ops"
+            echo "  arc @workday"
+        case tags
+            if test (count $argv) -ge 2
+                set -l hits (__arc_bookmarks tagged $argv[2])
+                if test (count $hits) -eq 0
+                    echo "no bookmarks tagged: $argv[2] (arc tags to see)" >&2
+                    return 1
+                end
+                printf '%s\n' $hits | sort | __arc_table
+            else
+                __arc_bookmarks tags | awk -F'\t' '{printf "%-18s %s\n", $1, $2}'
+            end
         case go
             if not type -q fzf
                 echo "arc go needs fzf (brew install fzf)" >&2
                 return 1
             end
-            set -l sel (__arc_bookmark_lines $file | sort | awk -F'\t' '{printf "%-18s %-16s %s\n", $1, $2, $3}' | fzf --prompt="arc> " --height=~40% --reverse)
+            set -l sel (__arc_bookmarks list | sort | __arc_table | fzf --prompt="arc> " --height=~40% --reverse)
             test -n "$sel"; or return 1
             arc (string match -r '^\S+' -- $sel)
         case spaces
             osascript -l JavaScript -e 'const w = Application("Arc").windows; w.length ? w[0].spaces.title().join("\n") : "no Arc windows open"'
         case edit
-            emacsclient -n $file
+            emacsclient -n (__arc_bookmarks file)
         case add
-            if test (count $argv) -lt 4
-                echo "usage: arc add <name> <space> <url>..." >&2
-                return 1
-            end
-            echo "$argv[2] | $argv[3] | $argv[4..]" >>$file
-            echo "added: $argv[2] -> $argv[3]"
+            __arc_bookmarks add $argv[2..]
         case in
             if test (count $argv) -lt 3
                 echo "usage: arc in <space> <url>..." >&2
                 return 1
             end
             __arc_open $argv[2..]
+        case '@*'
+            __arc_open_tag (string sub -s 2 -- $argv[1])
         case "*"
-            for line in (__arc_bookmark_lines $file)
-                set -l parts (string split \t $line)
-                if test "$parts[1]" = "$argv[1]"
-                    if string match -qr '\{[0-9]+\}|\{\*\}' -- $parts[3]
-                        __arc_open_template $parts[2] $parts[3] $argv[2..]
-                    else
-                        __arc_open $parts[2] (string split " " $parts[3])
-                    end
-                    return
-                end
+            set -l hit (__arc_bookmarks get $argv[1])
+            if test -z "$hit"
+                echo "no bookmark: $argv[1] (arc list to see, arc add to create)" >&2
+                return 1
             end
-            echo "no bookmark: $argv[1] (arc list to see, arc add to create)" >&2
-            return 1
+            set -l parts (string split \t $hit)
+            if string match -qr '\{[0-9]+\}|\{\*\}' -- $parts[3]
+                __arc_open_template $parts[2] $parts[3] $argv[2..]
+            else
+                __arc_open $parts[2] (string split " " $parts[3])
+            end
     end
 end
 
-function __arc_bookmark_lines
-    test -f $argv[1]; or return
-    string match -rv '^\s*(#|$)' <$argv[1] | while read -l line
-        set -l parts (string split -m 2 "|" $line)
-        test (count $parts) -eq 3; or continue
-        printf "%s\t%s\t%s\n" (string trim $parts[1]) (string trim $parts[2]) (string trim $parts[3])
+function __arc_bookmarks --description "Query the TOML bookmarks file: name, space, urls, tags as TSV"
+    $__fish_config_dir/bin/arc-bookmarks.py $argv
+end
+
+function __arc_table
+    awk -F'\t' '{printf "%-22s %-16s %-18s %s\n", $1, $2, $4, $3}'
+end
+
+function __arc_open_tag
+    set -l lines (__arc_bookmarks tagged $argv[1])
+    if test (count $lines) -eq 0
+        echo "no bookmarks tagged: $argv[1] (arc tags to see)" >&2
+        return 1
+    end
+
+    # One Arc call per space, so a tag spanning spaces opens each space's tabs together.
+    set -l spaces
+    for line in $lines
+        set -l parts (string split \t $line)
+        if string match -qr '\{[0-9]+\}|\{\*\}' -- $parts[3]
+            echo "skipping templated bookmark: $parts[1]" >&2
+            continue
+        end
+        contains -- $parts[2] $spaces; or set -a spaces $parts[2]
+    end
+
+    for space in $spaces
+        set -l urls
+        for line in $lines
+            set -l parts (string split \t $line)
+            test "$parts[2]" = "$space"; or continue
+            string match -qr '\{[0-9]+\}|\{\*\}' -- $parts[3]; and continue
+            set -a urls (string split " " $parts[3])
+        end
+        __arc_open $space $urls
     end
 end
 
