@@ -18,6 +18,11 @@ function github
     else
         echo "cloning $repo_url to $local_path"
         git clone $repo_url $local_path
+        and set -f cloned
     end
     cd $local_path
+    # define github_postclone to set up fresh clones your own way
+    if set -q cloned; and functions -q github_postclone
+        github_postclone $repo_user $repo_project $local_path
+    end
 end

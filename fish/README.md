@@ -85,6 +85,10 @@ folders if needed) and `cd`s into it, or just `cd`s there if it's already
 cloned. Takes `user/project`, `project` alone (falls back to `$GH_USER`), or
 a full `.git` URL/path — trailing `.git` is stripped either way.
 
+After a fresh clone it calls `github_postclone <user> <project> <path>` from
+inside the checkout, if you've defined one, so you can set up new clones your
+own way (colocate with jj, set a per-org email, install dependencies, …).
+
 **Install:**
 
 ```sh
