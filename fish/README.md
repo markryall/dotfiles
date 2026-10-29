@@ -150,3 +150,100 @@ b in <space> <url>...          # open url(s) in a space
 b edit                         # open the bookmarks file in $EDITOR (vim if unset)
 b spaces                       # list Crest spaces
 ```
+
+## senv
+
+Session-wide environment variables for Rex terminals, like tmux's
+`set-environment`. Set a variable with `senv` in one window and every new
+window, tab or split in the same Rex session starts with it too. Shells already open keep what they had, the same as tmux.
+
+```sh
+senv AWS_PROFILE=staging        # set it here and in every new shell of this session
+senv DATABASE_URL               # keep a variable this shell already has
+senv -e AWS_PROFILE             # drop it here and from new shells
+senv                            # list what this session keeps
+```
+
+`senv-run` wraps a command that exports variables (a `*-env` loader, `aws sso
+login`, a direnv-style function) and `senv`s every exported variable the
+command added or changed, and `senv -e`s any it removed. It's the Rex version
+of loading your env before starting a tmux server, so every window of the
+session inherits it:
+
+```sh
+senv-run my-project-env
+```
+
+It skips variables that only make sense in the shell they were set in:
+`PWD`, `OLDPWD`, `SHLVL`, `PATH`, the `REX_*` ids, mise's `__MISE_*` state
+and `DYLD_*` (macOS strips those from child processes anyway).
+
+### How a new window picks it up
+
+Rex puts a `REX_SESSION` id (`session:<uuid>`) in the environment of every
+shell it starts, and every window of a session shares it. `senv` keeps the
+session's variables as a fish script of `set -gx` lines at
+`~/.local/state/rex-session-env/<uuid>.fish`, and a `conf.d` hook sources that
+file in each new shell:
+
+```fish
+# conf.d/rex-session-env.fish
+if set -q REX_SESSION
+    set -l file ~/.local/state/rex-session-env/(string replace session: '' $REX_SESSION).fish
+    test -f $file; and source $file
+end
+```
+
+fish runs everything in `conf.d/` at startup, interactive or not, so a new
+window, a split, or a command Rex runs in the session all see the variables.
+`senv` writes values with `string escape`, so spaces, quotes and newlines
+survive the round trip. The directory is `700` and the files `600`, because
+these values are often tokens.
+
+### Cleaning up after ended sessions
+
+Files would pile up once their sessions end, so two things remove them:
+
+- `senv` removes files for sessions `rex ls` no longer lists each time it
+  writes (only when it can see its own session in that list, so a server
+  hiccup can't wipe the lot).
+- `rex-session-env-reaper.fish` follows `rex events` and deletes a session's
+  file as soon as it sees `session_destroyed`. Run it under launchd with
+  `KeepAlive` so it's restarted whenever the Rex server goes away; at each
+  start it first deletes files for sessions that ended while it wasn't running.
+
+**Requires:** Rex on macOS, with its `rex` CLI on `PATH` in your shells.
+
+**Install:**
+
+```sh
+cp fish/functions/senv.fish fish/functions/senv-run.fish ~/.config/fish/functions/
+cp fish/conf.d/rex-session-env.fish ~/.config/fish/conf.d/
+mkdir -p ~/.config/fish/bin && cp fish/bin/rex-session-env-reaper.fish ~/.config/fish/bin/
+```
+
+Then load the reaper as a launch agent (skip this and `senv`'s own cleanup
+still keeps the directory tidy, just less promptly):
+
+```sh
+mkdir -p ~/Library/LaunchAgents ~/.local/state/rex-session-env
+cat >~/Library/LaunchAgents/rex-session-env-reaper.plist <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>rex-session-env-reaper</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(command -v fish)</string>
+    <string>$HOME/.config/fish/bin/rex-session-env-reaper.fish</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardErrorPath</key><string>$HOME/.local/state/rex-session-env/reaper.log</string>
+</dict>
+</plist>
+PLIST
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/rex-session-env-reaper.plist
+```
